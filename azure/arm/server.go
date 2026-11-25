@@ -26,17 +26,17 @@
 //     MissingRegistrationForLocation), and A record sets (create or update,
 //     get, delete);
 //   - Microsoft.Compute virtual machines: create or update, get, list in a
-//     group, instance view, deallocate, start and delete, and their
+//     group, instance view, deallocate, power off, start and delete, and their
 //     extensions (create or update, get, list on a VM and delete);
 //   - Microsoft.Compute scale sets in the Uniform orchestration mode: create
 //     or update, update, get, list in a group, delete and delete instances,
 //     and their VMs (list, get);
-//   - Microsoft.Compute resource SKUs: list, which lists none;
+//   - Microsoft.Compute resource SKUs: list, as [WithResourceSKUs] sets them;
 //   - Microsoft.Compute managed disks and snapshots: create or update, get,
 //     list in a group and delete, and a snapshot's access (grant and revoke);
 //   - Microsoft.Compute galleries, their image definitions and image
 //     versions: create or update, get, list in their group, gallery or image
-//     definition, and delete;
+//     definition, and delete, and image versions also update;
 //   - Microsoft.Storage: storage accounts (create, get, list in a group or
 //     subscription, list keys and delete), name availability checks, the
 //     blob, file, queue and table services' properties (set and get), blob
@@ -243,6 +243,23 @@
 //     disk ID, with the group's name upper-cased as Azure writes it. Deleting
 //     it deletes the interfaces whose deleteOption is Delete and detaches the
 //     rest.
+//   - An update that changes a VM's osProfile.customData or its Linux SSH
+//     public keys fails with 409 PropertyChangeNotAllowed, "Changing property
+//     'customData' is not allowed." or naming
+//     linuxConfiguration.ssh.publicKeys, as Azure refuses both; one that
+//     leaves either out keeps it, as a GET leaves out customData.
+//   - A VM create whose operation [fault.ModeFailOperation] fails leaves the
+//     VM Failed, as Azure leaves a VM whose provisioning failed, such as with
+//     AllocationFailed: it has its interfaces and OS disk, no power state, and
+//     an instance view whose one status is
+//     ProvisioningState/failed/{code} at level Error with the error's
+//     message. A PUT over it provisions it again, as a retry does in Azure;
+//     deleting it deletes it. A failed update leaves the VM as it was.
+//   - Powering a VM off (powerOff, with or without skipShutdown) stops it,
+//     showing PowerState/stopping while in progress and then
+//     PowerState/stopped, VM stopped; it keeps its OS disk Attached and its
+//     LastOwnershipUpdateTime, as a stopped VM keeps its resources allocated.
+//     Start runs it again.
 //   - A VM made from an image makes its OS disk a managed disk, Attached and
 //     managed by the VM, and Reserved while the VM is deallocated, as Azure
 //     documents those states. Its SKU is the OS disk's storageAccountType and
@@ -355,6 +372,15 @@
 //     shows display names such as West US. Replication between regions,
 //     sharing, soft deletion, checking a version's source against its image
 //     definition, and VMs made from a version are not modeled.
+//   - An image version update (PATCH) takes tags and the publishingProfile
+//     and safetyProfile properties, merging the members it gives into the
+//     ones the version has, as an ARM PATCH does; storageProfile,
+//     securityProfile and restore fail with 400, as the server rejects input it
+//     does not model. It answers 200 with an Azure-AsyncOperation URL under
+//     capsOperations while in progress, the version showing Updating, as a
+//     PUT does. safetyProfile.blockDeletionBeforeEndOfLife is recorded: a
+//     blocked version can still be deleted, where Azure refuses it before its
+//     end-of-life date.
 //   - A scale set's VMs are numbered from 0 and never reuse a number. Raising
 //     sku.capacity creates VMs, each with the network interfaces and public
 //     IP addresses its profile describes; lowering it deletes the newest,
@@ -372,8 +398,15 @@
 //     with PropertyChangeNotAllowed. A PATCH takes sku and tags only.
 //     Deleting instances that do not exist fails with InvalidParameter and
 //     deletes nothing. Scale set VMs are always running.
-//   - Resource SKUs list none: a caller that checks availability sees no
-//     restrictions.
+//   - Resource SKUs list those [WithResourceSKUs] sets, none by default, each
+//     in one location, as Azure lists them. The list takes the one $filter
+//     Azure supports, location eq '{location}', matching locations without
+//     regard to case or spaces; any other filter fails with 400. Every SKU is
+//     in the one page, with no nextLink, and includeExtendedLocations adds
+//     nothing, as no SKU has extended locations. A restriction with zones is a
+//     Zone restriction and one without a Location restriction, whose values
+//     and restrictionInfo name the SKU's location. The SKUs a subscription is
+//     offered are not checked when a VM or scale set is created.
 //   - A storage account create that finishes at once answers 200, as Azure
 //     Storage does, and one in progress answers 202 with an empty body and
 //     only a Location URL, under Microsoft.Storage/operations, which answers
@@ -1008,6 +1041,7 @@ type Server struct {
 	public     *pool
 	deleted    map[string]*softDeleted
 	capacities []ModelCapacity
+	skus       []ResourceSKU
 	// unregistered are the namespaces that start NotRegistered, by their lower-case names.
 	unregistered map[string]string
 	providers    map[string]*provider
@@ -1173,6 +1207,7 @@ func (s *Server) registerRoutes() {
 	s.add("GET", vm+"/instanceView", vmKind.action("instanceView/read"), false, s.vmInstanceView)
 	s.add("POST", vm+"/deallocate", vmKind.action("deallocate/action"), true, s.powerVM(powerDeallocated))
 	s.add("POST", vm+"/start", vmKind.action("start/action"), true, s.powerVM(powerRunning))
+	s.add("POST", vm+"/powerOff", vmKind.action("powerOff/action"), true, s.powerVM(powerStopped))
 	s.add("DELETE", vm, vmKind.action("delete"), true, s.deleteVM)
 	s.registerExtensionRoutes()
 

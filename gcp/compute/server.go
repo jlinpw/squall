@@ -54,6 +54,11 @@
 //     sourceDisk, storageLocations and labels are rejected. Machine and
 //     disk types are any well-formed name, in the zone of the call; nothing
 //     checks that they exist or fit together.
+//   - A disk is CREATING, READY or DELETING. One that is FAILED, as Compute
+//     Engine leaves a disk whose creation failed, is set up with
+//     [Server.PutDisk], since a fault that fails an insert's operation
+//     creates nothing. A FAILED disk can be read, listed and deleted, but not
+//     attached or snapshotted.
 //   - Zones come from a fixed set per region, which [WithZones] changes.
 //     Regional calls take any region.
 //   - Networks are custom mode only: an insert must set autoCreateSubnetworks

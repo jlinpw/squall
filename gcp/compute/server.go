@@ -19,7 +19,11 @@
 //   - snapshots: insert, get, list, delete;
 //   - resource policies, on the beta API: list, get, insert, delete;
 //   - instance templates: list, get, insert, delete;
-//   - instance group managers: aggregatedList, which is always empty;
+//   - zonal instance group managers: list, aggregatedList, get, insert,
+//     delete, createInstances, deleteInstances, listManagedInstances,
+//     setInstanceTemplate;
+//   - instance group manager resize requests: list, get, insert, cancel,
+//     delete;
 //   - routes: list, get, insert, delete;
 //   - networks: list, get, insert, delete;
 //   - subnetworks: list, aggregatedList, get, insert, delete;
@@ -89,8 +93,43 @@
 //     either, and fields the server only
 //     records, such as guestAccelerators or reservationAffinity, keep the
 //     JSON the caller sent. Fields it does not know are rejected with 400.
-//     Instance group managers, deletion protection and resource policies
-//     other than group placement are not supported.
+//     Deletion protection and resource policies other than group placement
+//     are not supported.
+//   - A group creates each instance from its template as a bulk insertion
+//     would, and adds "created-by" and "instance-template" metadata naming
+//     the group and template by project ID. A createInstances or
+//     deleteInstances operation finishes at once while its instances are
+//     created or deleted in the background, which [WithSettleAfter] holds in
+//     progress as it holds any instance change; listManagedInstances then
+//     reports them CREATING or DELETING. An instance the template cannot
+//     make, such as one naming a resource policy that does not exist, stays a
+//     member, CREATING with no instance, whose lastAttempt holds the error. A
+//     createInstances naming an instance that exists in the zone, or a
+//     member, fails with 409 alreadyExists; one with a change in progress
+//     counts a read of it first. A group's targetSize is its number of
+//     members: an instance deleted other than through its group leaves it,
+//     and the group does not replace it. Deleting a group deletes its
+//     instances and resize requests, and deleting a template a group uses
+//     fails with 400 resourceInUseByAnotherResource. Groups are zonal only;
+//     versions, autohealing, target pools and stateful policies are
+//     rejected, and instanceLifecyclePolicy, resourcePolicies, updatePolicy,
+//     targetSizePolicy and namedPorts keep the JSON the caller sent, unchecked.
+//   - A resize request is ACCEPTED when its insert finishes, CREATING while
+//     its instances are created and SUCCEEDED once they run, all before the
+//     insert returns unless [WithSettleAfter] holds it: then each read of the
+//     request or its instances counts, it is CREATING on the last read in
+//     progress, and with a negative count it stays ACCEPTED until
+//     [Server.Settle]. A queued request makes no instances, and the group's
+//     targetSize grows when it does. A request naming an instance that exists,
+//     or one another ACCEPTED request names, fails in its operation with 400.
+//     Only an ACCEPTED request can be cancelled, and it stays CANCELLED until
+//     deleted; only a SUCCEEDED, FAILED or CANCELLED one can be deleted.
+//     Either call otherwise fails with 412 conditionNotMet, saying the request
+//     "has reached a final state" when it has. Capacity never runs out on its
+//     own: [Server.FailResizeRequest] ends a request in FAILED, deleting what
+//     it created, and [Server.FailResizeAttempt] records a failed attempt in
+//     its lastAttempt while it waits. requestedRunDuration is recorded, not
+//     enforced.
 //   - A bulkInsert skips each instance whose name, or a disk it would
 //     create, already exists, and creates the rest when they number at least
 //     minCount: its operation succeeds, counting both in its
@@ -121,7 +160,9 @@
 //   - A fault rule's Resource for an insert is the resource being created, so
 //     a rule can target the insert of one name. For a bulkInsert, it is the
 //     first instance it names in perInstanceProperties, or the zone's
-//     instances when it names none.
+//     instances when it names none. For a group's createInstances,
+//     deleteInstances, setInstanceTemplate or listManagedInstances it is the
+//     group, and for a resize request's cancel the request.
 //
 // [WithPolicy] grants the caller a set of IAM permissions and refuses a call
 // that needs one it lacks with 403 forbidden, "Required '<permission>'
@@ -197,6 +238,7 @@ type Server struct {
 	snapshots  map[string]*collection[*Snapshot]
 	policies   map[string]*collection[*ResourcePolicy]
 	templates  map[string]*collection[*InstanceTemplate]
+	groups     map[string]*collection[*InstanceGroupManager]
 	routes     map[string]*collection[*Route]
 
 	networks        map[string]*collection[*Network]
@@ -261,6 +303,7 @@ func New(opts ...Option) *Server {
 		snapshots:   map[string]*collection[*Snapshot]{},
 		policies:    map[string]*collection[*ResourcePolicy]{},
 		templates:   map[string]*collection[*InstanceTemplate]{},
+		groups:      map[string]*collection[*InstanceGroupManager]{},
 		routes:      map[string]*collection[*Route]{},
 
 		networks:        map[string]*collection[*Network]{},
@@ -329,7 +372,26 @@ func (s *Server) registerRoutes() {
 	s.route("POST "+global+"/instanceTemplates", "compute.instanceTemplates.insert", "", s.insertTemplate, withNameFromBody)
 	s.route("GET "+global+"/instanceTemplates/{name}", "compute.instanceTemplates.get", "", s.getTemplate, nil)
 	s.route("DELETE "+global+"/instanceTemplates/{name}", "compute.instanceTemplates.delete", "", s.deleteTemplate, nil)
+
+	const (
+		groups  = zone + "/instanceGroupManagers"
+		resizes = groups + "/{group}/resizeRequests"
+	)
+	s.route("GET "+groups, "compute.instanceGroupManagers.list", "", s.listGroupManagers, nil)
 	s.route("GET "+project+"/aggregated/instanceGroupManagers", "compute.instanceGroupManagers.aggregatedList", "", s.aggregatedGroupManagers, nil)
+	s.route("POST "+groups, "compute.instanceGroupManagers.insert", "", s.insertGroupManager, withNameFromBody)
+	s.route("GET "+groups+"/{name}", "compute.instanceGroupManagers.get", "", s.getGroupManager, nil)
+	s.route("DELETE "+groups+"/{name}", "compute.instanceGroupManagers.delete", "", s.deleteGroupManager, nil)
+	s.route("POST "+groups+"/{name}/createInstances", "compute.instanceGroupManagers.createInstances", "/createInstances", s.createGroupInstances, nil)
+	s.route("POST "+groups+"/{name}/deleteInstances", "compute.instanceGroupManagers.deleteInstances", "/deleteInstances", s.deleteGroupInstances, nil)
+	s.route("POST "+groups+"/{name}/setInstanceTemplate", "compute.instanceGroupManagers.setInstanceTemplate", "/setInstanceTemplate", s.setGroupTemplate, nil)
+	s.route("POST "+groups+"/{name}/listManagedInstances", "compute.instanceGroupManagers.listManagedInstances", "/listManagedInstances", s.listManagedInstances, nil)
+
+	s.route("GET "+resizes, "compute.instanceGroupManagerResizeRequests.list", "", s.listResizeRequests, nil)
+	s.route("POST "+resizes, "compute.instanceGroupManagerResizeRequests.insert", "", s.insertResizeRequest, withNameFromBody)
+	s.route("GET "+resizes+"/{name}", "compute.instanceGroupManagerResizeRequests.get", "", s.getResizeRequest, nil)
+	s.route("DELETE "+resizes+"/{name}", "compute.instanceGroupManagerResizeRequests.delete", "", s.deleteResizeRequest, nil)
+	s.route("POST "+resizes+"/{name}/cancel", "compute.instanceGroupManagerResizeRequests.cancel", "/cancel", s.cancelResizeRequest, nil)
 
 	s.route("GET "+global+"/routes", "compute.routes.list", "", s.listRoutes, nil)
 	s.route("POST "+global+"/routes", "compute.routes.insert", "", s.insertRoute, withNameFromBody)
@@ -409,7 +471,7 @@ func withNameFromBody(r *http.Request, collection string) string {
 // route registers h for pattern as method. A non-nil target names the call's
 // resource from the request, in place of its path.
 func (s *Server) route(pattern, method, verb string, h handler, target func(*http.Request, string) string) {
-	startsOperation := !strings.HasPrefix(pattern, http.MethodGet+" ") && verb != "/wait"
+	startsOperation := !strings.HasPrefix(pattern, http.MethodGet+" ") && verb != "/wait" && verb != "/listManagedInstances"
 	s.mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 		resource := strings.TrimSuffix(resourcePath(r), verb)
 		if target != nil {

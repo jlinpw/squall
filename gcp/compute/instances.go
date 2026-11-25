@@ -850,7 +850,7 @@ func (s *Server) bulkInsertInstances(r *http.Request, opFault *apiError) (any, *
 		batch     []built
 		insts     []*Instance
 		disks     []*Disk
-		conflicts []operationError
+		conflicts []OperationError
 		creating  = map[string]bool{}
 	)
 	for _, name := range names {
@@ -862,11 +862,11 @@ func (s *Server) bulkInsertInstances(r *http.Request, opFault *apiError) (any, *
 		}
 		before := len(conflicts)
 		if _, ok := lookupIn(s.instances, zone, name); ok {
-			conflicts = append(conflicts, operationError{"RESOURCE_ALREADY_EXISTS", alreadyExists(instancePath(zone, name)).Message})
+			conflicts = append(conflicts, OperationError{"RESOURCE_ALREADY_EXISTS", alreadyExists(instancePath(zone, name)).Message})
 		}
 		for _, disk := range d {
 			if _, ok := lookupIn(s.disks, zone, disk.Name); ok || creating[disk.Name] {
-				conflicts = append(conflicts, operationError{"RESOURCE_ALREADY_EXISTS", alreadyExists(diskPath(zone, disk.Name)).Message})
+				conflicts = append(conflicts, OperationError{"RESOURCE_ALREADY_EXISTS", alreadyExists(diskPath(zone, disk.Name)).Message})
 			}
 		}
 		if len(conflicts) > before {
@@ -882,7 +882,7 @@ func (s *Server) bulkInsertInstances(r *http.Request, opFault *apiError) (any, *
 	if conflicted {
 		opFault = &apiError{
 			Status: http.StatusConflict, Reason: "resourceAlreadyExists", Message: conflicts[0].Message,
-			opErrors: append([]operationError{{"VM_MIN_COUNT_NOT_REACHED", fmt.Sprintf("Requested minimum count of %d VMs could not be created.", in.MinCount)}}, conflicts...),
+			opErrors: append([]OperationError{{"VM_MIN_COUNT_NOT_REACHED", fmt.Sprintf("Requested minimum count of %d VMs could not be created.", in.MinCount)}}, conflicts...),
 		}
 	}
 	location := "zones/" + r.PathValue("zone")

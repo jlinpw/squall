@@ -86,6 +86,10 @@ type resource struct {
 	restoring bool
 	// shareSnapshots are a file share's snapshots, oldest first.
 	shareSnapshots []*shareSnapshot
+	// searchData is a search service's indexes, data sources and indexers.
+	searchData *searchState
+	// jobs are a Cognitive Services account's ingestion jobs, by ID.
+	jobs map[string]*ingestionJob
 }
 
 // inGroup reports whether r is in the group with key gk.
@@ -339,6 +343,25 @@ func systemData(res *resource) map[string]any {
 		"createdBy": clientID, "createdByType": "Application", "createdAt": timestamp(res.created),
 		"lastModifiedBy": clientID, "lastModifiedByType": "Application", "lastModifiedAt": timestamp(res.modified),
 	}
+}
+
+// FailProvisioning leaves the resource with the ID id Failed, as Azure leaves
+// a resource whose create or update failed once it was accepted, for gets,
+// lists and later writes to see. A fault that fails an operation leaves no
+// trace of the call, so use it to set up such a resource. It fails for a
+// resource the server does not hold or that has a change in progress.
+func (s *Server) FailProvisioning(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res := s.resources[key(id)]
+	switch {
+	case res == nil:
+		return fmt.Errorf("squall: no resource has the ID %s", id)
+	case res.pending != nil && res.pending.complete != nil:
+		return fmt.Errorf("squall: %s has a change in progress", id)
+	}
+	res.state = stateFailed
+	return nil
 }
 
 // change starts an operation on res that shows it in state until it

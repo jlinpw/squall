@@ -61,8 +61,13 @@
 //     and delete), their deployments (create or update, get, list and
 //     delete), deleted accounts (get and purge) and model capacities (list,
 //     as [WithModelCapacities] sets them);
+//   - the Azure OpenAI data plane of Cognitive Services accounts, which
+//     [Server.OpenAI] serves: ingestion jobs (create and get);
 //   - Microsoft.Search: search services (create or update, get and delete)
 //     and their admin keys (list);
+//   - the Azure AI Search data plane, which [Server.Search] serves: indexes,
+//     data sources and indexers (create or update, get and delete), indexer
+//     runs and status, and documents (index, and search for all);
 //   - Microsoft.KeyVault: vaults (create or update, get and list in a group);
 //   - Microsoft.Insights: Application Insights components (create or update,
 //     get and list in a group);
@@ -133,6 +138,9 @@
 //     with 400.
 //   - Listing groups or a group's resources with $top returns at most that
 //     many, with no nextLink; Azure may page them instead.
+//   - A fault that fails an operation leaves no trace of the call, where
+//     Azure may leave the resource Failed; [Server.FailProvisioning] sets up
+//     a resource in that state.
 //   - Resource names, subscription IDs and locations are not validated, and
 //     names match without regard to case. Tags are not validated. Fields the
 //     server only records keep the JSON the caller sent; fields it does not
@@ -737,7 +745,10 @@
 //     00000000-0000-0000-0000-000000000000, as the server does not read
 //     the caller's token.
 //     An update answers 200 and shows Updating, where Azure answers 201 and
-//     shows Creating. A subnet check answers 200 for any subnet.
+//     shows Creating. A subnet check answers 200 for any subnet, unless
+//     [Server.FailSubnetCheck] fails it: then it answers 400 with the error
+//     the API defines for it, {"filesystemSubnet": {"status": "Invalid",
+//     "message": ...}}, and no x-ms-error-code header.
 //   - A Cognitive Services account change in progress answers with an
 //     Azure-AsyncOperation URL under
 //     Microsoft.CognitiveServices/locations/{location}/operationResults, whose
@@ -761,8 +772,8 @@
 //     and the SDK reads the resource until its provisioningState ends, so
 //     [fault.ModeFailOperation] fails their writes as [fault.ModeReject]
 //     does. A deployment being created shows Accepted. A search service shows
-//     provisioningState and status provisioning, then succeeded and running,
-//     in lower case as Search writes them, and the endpoint
+//     provisioningState and status provisioning, then succeeded and running
+//     (or failed and error), in lower case as Search writes them, and the endpoint
 //     https://{name}.search.windows.net. Deleting a deployment or a search
 //     service answers 200 at once. Search service names are not unique across
 //     the server, where Azure makes them unique across Azure. Admin keys are
@@ -828,6 +839,72 @@
 //     has not replicated yet never fails with PrincipalNotFound, and names
 //     need not be GUIDs or unique across scopes. Deleting the group deletes
 //     the assignments at its scope.
+//   - The Search data plane takes the service from a host name such as
+//     {service}.search.windows.net, or else from the first path segment, and
+//     addresses an index, data source or indexer as indexes/{name} or, as
+//     the REST API also accepts, indexes('{name}'). Services in different
+//     groups may share a name; the one whose ID sorts first is served. Each
+//     call needs an api-version, which may be any value, and one of the
+//     service's admin keys in api-key: a missing or wrong key fails with 403,
+//     as Search answers a wrong one, and a Microsoft Entra ID token with 400
+//     as not supported. Query keys are not modeled. Errors are
+//     {"error": {"code", "message"}} with an empty code, as Search writes
+//     most of them; the messages other than those for a missing api-version,
+//     a concurrent indexer run, an unknown document property and a failed
+//     precondition are inferred. A create answers 201 and an update 200 with
+//     the definition, its @odata.etag and an ETag header, or 204 with Prefer:
+//     return=minimal, and If-Match and If-None-Match apply to writes and
+//     deletes. A get or delete of something that does not exist answers 404,
+//     as Search does. Names follow Microsoft's naming rules: up to 128
+//     characters, an index's lower-case letters, digits and dashes, and a
+//     data source's or indexer's also upper-case letters and underscores.
+//     Definitions keep the JSON the caller sent, @odata annotations aside,
+//     and members Search does not define fail with 400. Deleting a search
+//     service, or its group, deletes what its data plane holds.
+//   - An index needs one key field, of type Edm.String, and each field a name
+//     and a type; an update may add fields but not remove one or change its
+//     type or which is the key, which fails with 400 (inferred). Deleting an
+//     index deletes its documents. Index Documents takes upload, merge,
+//     mergeOrUpload and delete actions, up to 1,000 a batch, and answers each
+//     action's statusCode (201 for a new document, 200 otherwise, 404 for a
+//     merge of a missing one), with 207 when one fails, as Microsoft
+//     documents; values are not checked against their fields' types. Search
+//     Documents (GET) takes a search of * or none, $select, $top (50 unless
+//     set), $skip and $count, and lists the documents in key order, each with
+//     an @search.score of 1 and without fields that are not retrievable;
+//     other parameters, full-text search included, fail with 400.
+//   - A data source needs a type the API lists, credentials.connectionString
+//     and container.name. It shows its connection string as null, and an
+//     update that sends <unchanged> or <redacted> keeps it, as Microsoft
+//     documents. An indexer needs dataSourceName and targetIndexName, which
+//     must exist (400, inferred); skillsets are not modeled, so one that names
+//     a skillset fails with 400. An indexer runs when it is created, unless
+//     disabled, and when run, which answers 202, as Microsoft documents; a run
+//     while another is in progress fails with 409. Indexers read nothing and
+//     index nothing: a run processes no items and leaves the index's
+//     documents as they were. A run is inProgress until the reads of the
+//     indexer's status [WithSettleAfter] sets, or [Server.Settle], then
+//     success. The status shows the indexer running, its last result and up
+//     to 50 executions, newest first, and a Standard service's limits, which
+//     are inferred. Schedules, resets, change tracking and listing are not
+//     served.
+//   - The Azure OpenAI data plane takes the account's custom subdomain from a
+//     host name such as {subdomain}.openai.azure.com, or else from the first
+//     path segment, and serves accounts of kind OpenAI or AIServices; other
+//     accounts, and calls without an api-version, answer 404 Resource not
+//     found, which for a missing api-version is inferred. Each call needs one
+//     of the account's keys in api-key: a missing or wrong one fails with 401
+//     and the message Azure OpenAI answers, and a Microsoft Entra ID token
+//     with 400 as not supported. An ingestion job needs kind SystemCompute,
+//     with searchServiceConnection and datasource, or UserCompute, with
+//     workspaceId, compute, target and datasource. Its connections and data
+//     source are recorded, not checked or read, and it creates nothing in the
+//     search service. A create answers 200 with the job, and one with the ID
+//     of an existing job replaces and restarts it, which is inferred. A job
+//     is running until the reads of it [WithSettleAfter] sets, or
+//     [Server.Settle], then succeeded. A get of a job that does not exist
+//     answers 404, whose code and message are inferred. Listing jobs and
+//     their runs are not served.
 //   - Every namespace is Registered in every subscription unless
 //     [WithUnregisteredProviders] names it; Azure registers only some by
 //     default, such as Microsoft.Resources and Microsoft.CostManagement but
@@ -869,7 +946,19 @@
 // DeleteContainer, whose resource is {account}/{container}/{blob}. Blob
 // service faults fail as [fault.ModeReject] does for ModeFailOperation, and
 // the generic reasons become InternalError, or ServerBusy for 503 and rate
-// limits. Other fault method names are the operation's Azure RBAC action, such as
+// limits. Search data plane faults are named for the operation's ID in the
+// REST API's specification, such as Indexes_CreateOrUpdate, Indexes_Delete,
+// DataSources_Delete, Indexers_Run, Indexers_GetStatus, Documents_Index or
+// Documents_SearchGet, whose resource is {service}/{collection}/{name} with
+// the service in lower case, such as find/indexers/nightly; ModeFailOperation makes Indexers_Run start a run
+// that ends in transientFailure with the fault's message, and other calls
+// fail as ModeReject does. The generic reasons become an empty code, and a
+// rate limit 503. Azure OpenAI faults are named IngestionJobs_Create and
+// IngestionJobs_Get, whose resource is {subdomain}/ingestion/jobs/{jobId}
+// with the subdomain in lower case;
+// ModeFailOperation makes IngestionJobs_Create answer a job that has failed
+// with the fault's error, and the generic reasons become the HTTP status,
+// such as "503" or "429", as Azure OpenAI writes its codes. Other fault method names are the operation's Azure RBAC action, such as
 // "Microsoft.Compute/virtualMachines/write",
 // "Microsoft.Compute/virtualMachines/deallocate/action" or
 // "Microsoft.Resources/subscriptions/resourceGroups/delete". A call's
@@ -940,7 +1029,9 @@
 // "*" does not grant them, where a grant of "*" here does. Legal holds and
 // policies need containers/setLegalHold/action,
 // containers/clearLegalHold/action, containers/immutabilityPolicies/write and
-// containers/immutabilityPolicies/lock/action. Actions are not
+// containers/immutabilityPolicies/lock/action. The Search and Azure OpenAI
+// data planes authenticate with keys, which Azure RBAC does not apply to, so
+// the policy does not check them. Actions are not
 // checked against the scope they act on: a grant covers every subscription.
 //
 // A lost response aborts the handler with [http.ErrAbortHandler] after
@@ -1008,6 +1099,8 @@ type Server struct {
 	public     *pool
 	deleted    map[string]*softDeleted
 	capacities []ModelCapacity
+	// subnetChecks are the messages subnet checks fail with, by the subnet's ID's key.
+	subnetChecks map[string]string
 	// unregistered are the namespaces that start NotRegistered, by their lower-case names.
 	unregistered map[string]string
 	providers    map[string]*provider
@@ -1061,6 +1154,7 @@ func New(opts ...Option) *Server {
 		unregistered: map[string]string{},
 		providers:    map[string]*provider{},
 		exports:      map[string]*export{},
+		subnetChecks: map[string]string{},
 
 		logWorkspacesDeleted: map[string]*softDeleted{},
 		// Neither range is routable on the internet, so a test cannot reach a real host by mistake.

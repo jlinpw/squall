@@ -30,19 +30,24 @@ var basePermissions = map[string][]string{
 	"compute.zones.list": {"compute.zones.list"},
 	"compute.zones.get":  {"compute.zones.get"},
 
-	"compute.instances.bulkInsert":      {"compute.instances.create"},
-	"compute.instances.insert":          {"compute.instances.create"},
-	"compute.instances.list":            {"compute.instances.list"},
-	"compute.instances.aggregatedList":  {"compute.instances.list"},
-	"compute.instances.get":             {"compute.instances.get"},
-	"compute.instances.delete":          {"compute.instances.delete"},
-	"compute.instances.stop":            {"compute.instances.stop"},
-	"compute.instances.start":           {"compute.instances.start"},
-	"compute.instances.setLabels":       {"compute.instances.setLabels"},
-	"compute.instances.setMachineType":  {"compute.instances.setMachineType"},
-	"compute.instances.addAccessConfig": {"compute.instances.addAccessConfig", "compute.subnetworks.useExternalIp|compute.networks.useExternalIp"},
-	"compute.instances.attachDisk":      {"compute.instances.attachDisk"},
-	"compute.instances.detachDisk":      {"compute.instances.detachDisk"},
+	"compute.acceleratorTypes.aggregatedList": {"compute.acceleratorTypes.list"},
+	"compute.acceleratorTypes.list":           {"compute.acceleratorTypes.list"},
+	"compute.acceleratorTypes.get":            {"compute.acceleratorTypes.get"},
+
+	"compute.instances.bulkInsert":       {"compute.instances.create"},
+	"compute.regionInstances.bulkInsert": {"compute.instances.create"},
+	"compute.instances.insert":           {"compute.instances.create"},
+	"compute.instances.list":             {"compute.instances.list"},
+	"compute.instances.aggregatedList":   {"compute.instances.list"},
+	"compute.instances.get":              {"compute.instances.get"},
+	"compute.instances.delete":           {"compute.instances.delete"},
+	"compute.instances.stop":             {"compute.instances.stop"},
+	"compute.instances.start":            {"compute.instances.start"},
+	"compute.instances.setLabels":        {"compute.instances.setLabels"},
+	"compute.instances.setMachineType":   {"compute.instances.setMachineType"},
+	"compute.instances.addAccessConfig":  {"compute.instances.addAccessConfig", "compute.subnetworks.useExternalIp|compute.networks.useExternalIp"},
+	"compute.instances.attachDisk":       {"compute.instances.attachDisk"},
+	"compute.instances.detachDisk":       {"compute.instances.detachDisk"},
 
 	"compute.disks.list":           {"compute.disks.list"},
 	"compute.disks.aggregatedList": {"compute.disks.list"},
@@ -174,7 +179,7 @@ func needs(method string, r *http.Request) []string {
 	case "compute.instances.insert":
 		perms = append(perms, f.needs()...)
 		add(f.DeletionProtection, "compute.instances.setDeletionProtection")
-	case "compute.instances.bulkInsert":
+	case "compute.instances.bulkInsert", "compute.regionInstances.bulkInsert":
 		add(f.SourceInstanceTemplate != "", "compute.instanceTemplates.useReadOnly")
 		if f.InstanceProperties != nil {
 			perms = append(perms, f.InstanceProperties.needs()...)

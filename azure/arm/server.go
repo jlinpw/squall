@@ -25,9 +25,10 @@
 //     global location (create or update, get; another location fails with
 //     MissingRegistrationForLocation), and A record sets (create or update,
 //     get, delete);
-//   - Microsoft.Compute virtual machines: create or update, get, list in a
-//     group, instance view, deallocate, start and delete, and their
-//     extensions (create or update, get, list on a VM and delete);
+//   - Microsoft.Compute virtual machines: create or update, update, get,
+//     list in a group, instance view, deallocate, start and delete, their
+//     data disks, and their extensions (create or update, get, list on a VM
+//     and delete);
 //   - Microsoft.Compute scale sets in the Uniform orchestration mode: create
 //     or update, update, get, list in a group, delete and delete instances,
 //     and their VMs (list, get);
@@ -256,8 +257,34 @@
 //     OperationNotAllowed, naming the VM. A disk's LastOwnershipUpdateTime,
 //     capitalized as Azure writes it, is when a VM last attached or released
 //     it, or was last deallocated or started while holding it, and is absent
-//     until then. Data disks, and the OS disks of scale set VMs, are not
-//     modeled.
+//     until then. The disks of scale set VMs are not modeled.
+//   - A VM's PATCH takes tags and storageProfile.dataDisks. The OS disk and
+//     image reference it sends back are kept as they were, except that
+//     renaming the OS disk fails with PropertyChangeNotAllowed; other
+//     properties, identity, plan and zones fail with 400 as not supported,
+//     so change them with a PUT. It answers 200, with an
+//     Azure-AsyncOperation URL while it is in progress.
+//   - A VM's data disks attach managed disks that exist (createOption
+//     Attach), each at its own lun from 0 to 63. A lun outside that range,
+//     which Azure narrows by VM size, or one two disks share ("A disk at LUN
+//     0 already exists.") fails with InvalidParameter, which is inferred.
+//     Other createOptions, image, vhd and sourceResource fail with 400 as
+//     not supported. A PUT or PATCH that lists dataDisks replaces them: a
+//     disk it leaves out, or marks toBeDetached, is detached and dropped from
+//     the list, as Microsoft documents detaching a data disk. One that leaves
+//     out dataDisks keeps them, which for a PUT is inferred, as one that
+//     leaves out osProfile keeps it. Attaching a disk another VM holds fails
+//     with 409 OperationNotAllowed, as for an OS disk; a disk the server does
+//     not hold is recorded, not checked, and the location of one it holds is
+//     not checked. A data disk shows its disk's name and diskSizeGB,
+//     toBeDetached false, and deleteOption Detach unless set, the default
+//     Microsoft documents. Its disk shows managedBy and diskState as an OS
+//     disk does, and its LastOwnershipUpdateTime moves as an OS disk's does.
+//     Deleting the VM detaches its data disks, deleting those whose
+//     deleteOption is Delete, and deleting a group that holds a disk a VM
+//     elsewhere has attached fails with ResourceGroupDeletionBlocked, as an
+//     attached disk cannot be deleted. caching, writeAcceleratorEnabled and
+//     detachOption are recorded, not modeled.
 //   - A VM extension create answers 201, and an update 200, with an
 //     Azure-AsyncOperation URL under
 //     Microsoft.Compute/locations/{location}/operations; a delete in progress
@@ -1169,6 +1196,7 @@ func (s *Server) registerRoutes() {
 	vm := compute + "/virtualMachines/{name}"
 	s.add("GET", compute+"/virtualMachines", vmKind.action("read"), false, s.listVMs)
 	s.add("PUT", vm, vmKind.action("write"), true, s.putVM)
+	s.add("PATCH", vm, vmKind.action("write"), true, s.patchVM)
 	s.add("GET", vm, vmKind.action("read"), false, s.getVM)
 	s.add("GET", vm+"/instanceView", vmKind.action("instanceView/read"), false, s.vmInstanceView)
 	s.add("POST", vm+"/deallocate", vmKind.action("deallocate/action"), true, s.powerVM(powerDeallocated))

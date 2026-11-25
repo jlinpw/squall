@@ -402,6 +402,7 @@ func (s *Server) remove(res *resource) {
 	case res.vm != nil:
 		s.detachNICs(res, true)
 		s.releaseOSDisk(res)
+		s.releaseDataDisks(res)
 		s.removeExtensions(res)
 	case res.snap != nil:
 		s.failCopiesOf(res)

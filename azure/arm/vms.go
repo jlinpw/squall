@@ -217,6 +217,10 @@ func (s *Server) putVM(c *call) (*reply, *apiError) {
 			return nil, diskAttached(d.name, d.disk.vm)
 		}
 	}
+	disks, err := s.planDataDisks(existing, id, b.props)
+	if err != nil {
+		return nil, err
+	}
 	render := func() []byte { return encode(s.renderVM(res, "")) }
 	paths := computeOps(c, b.location)
 	if c.opFault != nil {
@@ -227,6 +231,7 @@ func (s *Server) putVM(c *call) (*reply, *apiError) {
 		return accepted(c, op, status, status, false, func() []byte { return withState(res, putState(status), render) }), nil
 	}
 	s.applyVM(res, b)
+	s.applyDataDisks(res, disks)
 	s.resources[key(id)] = res
 	op := s.change(c, res, paths, 0, putState(status), func() {
 		if res.vm.power == powerStarting {

@@ -65,7 +65,21 @@ var basePermissions = map[string][]string{
 	"compute.instanceTemplates.get":    {"compute.instanceTemplates.get"},
 	"compute.instanceTemplates.delete": {"compute.instanceTemplates.delete"},
 
-	"compute.instanceGroupManagers.aggregatedList": {"compute.instanceGroupManagers.list"},
+	"compute.instanceGroupManagers.list":                 {"compute.instanceGroupManagers.list"},
+	"compute.instanceGroupManagers.aggregatedList":       {"compute.instanceGroupManagers.list"},
+	"compute.instanceGroupManagers.insert":               {"compute.instanceGroupManagers.create"},
+	"compute.instanceGroupManagers.get":                  {"compute.instanceGroupManagers.get"},
+	"compute.instanceGroupManagers.delete":               {"compute.instanceGroupManagers.delete", "compute.instanceGroups.delete"},
+	"compute.instanceGroupManagers.createInstances":      {"compute.instanceGroupManagers.update"},
+	"compute.instanceGroupManagers.deleteInstances":      {"compute.instanceGroupManagers.update"},
+	"compute.instanceGroupManagers.setInstanceTemplate":  {"compute.instanceGroupManagers.update", "compute.instanceTemplates.get|compute.instanceTemplates.useReadOnly"},
+	"compute.instanceGroupManagers.listManagedInstances": {"compute.instanceGroupManagers.get"},
+
+	"compute.instanceGroupManagerResizeRequests.list":   {"compute.instanceGroupManagers.get"},
+	"compute.instanceGroupManagerResizeRequests.insert": {"compute.instanceGroupManagers.update"},
+	"compute.instanceGroupManagerResizeRequests.get":    {"compute.instanceGroupManagers.get"},
+	"compute.instanceGroupManagerResizeRequests.delete": {"compute.instanceGroupManagers.update"},
+	"compute.instanceGroupManagerResizeRequests.cancel": {"compute.instanceGroupManagers.update"},
 
 	"compute.routes.list":   {"compute.routes.list"},
 	"compute.routes.insert": {"compute.routes.create", "compute.networks.updatePolicy"},

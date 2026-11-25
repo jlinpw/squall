@@ -16,7 +16,7 @@ type apiError struct {
 	Reason  string
 	Message string
 	// opErrors, when set, are the errors an operation that ends in this one lists.
-	opErrors []operationError
+	opErrors []OperationError
 }
 
 func (e *apiError) Error() string { return fmt.Sprintf("%d %s: %s", e.Status, e.Reason, e.Message) }
